@@ -20,6 +20,20 @@ public class FulfilmentOnSqlServerTests
         public override DateTimeOffset GetUtcNow() => new(utc, TimeSpan.Zero);
     }
 
+    /// <summary>
+    /// The handler reads the clock after its "already processed?" check and just before SaveChanges. Making every
+    /// participant wait at a barrier there guarantees both copies passed the check before either one saves.
+    /// </summary>
+    private sealed class BarrierTime(DateTime utc, Barrier barrier) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow()
+        {
+            if (!barrier.SignalAndWait(TimeSpan.FromSeconds(30)))
+                throw new TimeoutException("the other handler never reached SaveChanges");
+            return new DateTimeOffset(utc, TimeSpan.Zero);
+        }
+    }
+
     /// <summary>Keeps every log message so a test can tell which code path ran.</summary>
     private sealed class ListLogger<T> : ILogger<T>
     {
@@ -66,13 +80,14 @@ public class FulfilmentOnSqlServerTests
         var timeB = timeA.AddMinutes(7);
         var log = new ListLogger<OrderFulfilment>();
 
-        // Both copies read "not processed yet" and then sit in the simulated work, so both reach SaveChanges.
+        // Both copies read "not processed yet", then meet at the barrier, then both call SaveChanges.
         // Only the primary key on ProcessedMessages stops a double fulfilment.
+        using var barrier = new Barrier(2);
         await using var db1 = new ShelfDbContext(_options);
         await using var db2 = new ShelfDbContext(_options);
         var results = await Task.WhenAll(
-            Handler(db1, 500, new FixedTime(timeA), log).HandleAsync(orderId),
-            Handler(db2, 500, new FixedTime(timeB), log).HandleAsync(orderId));
+            Task.Run(() => Handler(db1, 0, new BarrierTime(timeA, barrier), log).HandleAsync(orderId)),
+            Task.Run(() => Handler(db2, 0, new BarrierTime(timeB, barrier), log).HandleAsync(orderId)));
 
         await using var check = new ShelfDbContext(_options);
         var order = await check.Orders.SingleAsync(o => o.Id == orderId);

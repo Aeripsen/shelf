@@ -118,8 +118,9 @@ and an integration test checks that an order total of 33.97 round-trips through 
 **Concurrent cart changes.** Cart lines carry a SQL Server `rowversion`. Adding to the cart re-reads and retries when
 another request changed the same cart in between, so two quick clicks never lose an addition (an integration test
 fires five adds at once and expects a quantity of 5). Checkout deletes the cart lines with their rowversion in the
-`WHERE` clause, so if the cart changed after checkout read it, nothing is written and the API answers 409 asking the
-shopper to review the cart.
+`WHERE` clause, so if a line that checkout read was updated or removed in the meantime, nothing is written and the API
+answers 409 asking the shopper to review the cart. A different book added at the same moment is not part of the order;
+it stays in the cart for the next checkout.
 
 ## Limitations
 
@@ -131,6 +132,9 @@ shopper to review the cart.
 - **Dual write.** Checkout commits to SQL Server and then publishes to RabbitMQ. If the broker is unreachable between
   the two, the order is saved as `Placed` but never published, and the API returns an error. The standard fix is a
   transactional outbox (MassTransit has one for EF Core), which is the next step.
+- Adding to the cart is not idempotent. The SQL Server connection retries transient failures, so if a write commits
+  but its acknowledgement is lost, the replay can count that addition twice. A client-generated idempotency key per
+  add would close this.
 - No authentication: carts are keyed by a browser-generated id, and anyone with an order id can read that order.
 - No payments. Prices are sample values.
 - RavenDB runs as a single unsecured node in development mode.

@@ -12,6 +12,9 @@ export function OrderPage() {
   useEffect(() => {
     let stopped = false
     let timer: number | undefined
+    // A different order id: never show the previous order's details while the new one loads.
+    setOrder(null)
+    setError(null)
 
     async function poll() {
       try {
@@ -23,6 +26,7 @@ export function OrderPage() {
       } catch (e) {
         if (stopped) return
         if (e instanceof ApiError && e.status === 404) {
+          setOrder(null)
           setError('Order not found.')
           return
         }
