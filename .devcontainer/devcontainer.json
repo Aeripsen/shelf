@@ -1,0 +1,20 @@
+{
+  // Opens Shelf in GitHub Codespaces (or VS Code Dev Containers) with Docker, the .NET 8 SDK and Node 22,
+  // so the whole stack runs with `docker compose up --build` without installing anything locally.
+  "name": "Shelf",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:1-8.0",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  // SQL Server, RavenDB, RabbitMQ and three app containers fit in 8 GB.
+  "hostRequirements": { "memory": "8gb" },
+  "forwardPorts": [3000, 5080, 15672, 8081],
+  "portsAttributes": {
+    "3000": { "label": "Storefront", "onAutoForward": "openBrowser" },
+    "5080": { "label": "API and Swagger" },
+    "15672": { "label": "RabbitMQ management" },
+    "8081": { "label": "RavenDB Studio" }
+  },
+  "postCreateCommand": "dotnet restore Shelf.sln && (cd e2e && npm ci)"
+}
