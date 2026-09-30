@@ -42,6 +42,29 @@ jobs:
           path: tests/Shelf.IntegrationTests/TestResults/*.trx
           retention-days: 90
 
+  mutation:
+    name: Stryker.NET mutation testing of the fulfilment worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet tool restore
+      # Mutates OrderFulfilment.cs and OrderPlacedConsumer.cs (see stryker-config.json) and runs the unit tests
+      # against each mutant. Reports only; the score does not fail the build.
+      - run: dotnet stryker
+        working-directory: tests/Shelf.UnitTests
+      - name: Mutation report in the job summary
+        if: always()
+        run: cat tests/Shelf.UnitTests/StrykerOutput/*/reports/mutation-report.md >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report
+          path: tests/Shelf.UnitTests/StrykerOutput/*/reports
+          retention-days: 90
+
   web:
     name: Storefront lint and strict TypeScript build
     runs-on: ubuntu-latest

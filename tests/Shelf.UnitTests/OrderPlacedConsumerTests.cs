@@ -101,4 +101,15 @@ public class OrderPlacedConsumerTests
             Assert.That(clock.Elapsed, Is.LessThan(TimeSpan.FromSeconds(15)), "success should not wait for the 15 s interval");
         });
     }
+
+    [Test]
+    public void Worker_endpoint_is_the_queue_the_API_declares()
+    {
+        // The API binds QueueNames.OrderPlaced to the OrderPlaced exchange so that messages wait for a worker that has
+        // never started. If the worker consumed from any other queue, those messages would never be read.
+        IConsumerDefinition definition = new OrderPlacedConsumerDefinition();
+        var name = definition.GetEndpointName(KebabCaseEndpointNameFormatter.Instance);
+
+        Assert.That(name, Is.EqualTo(QueueNames.OrderPlaced));
+    }
 }

@@ -99,4 +99,18 @@ public class OrderFulfilmentTests
         Assert.ThrowsAsync<OrderNotFoundException>(() => handler.HandleAsync(Guid.NewGuid()));
         Assert.That(await db.ProcessedMessages.CountAsync(), Is.EqualTo(0));
     }
+
+    [Test]
+    public async Task Simulated_work_runs_before_the_order_is_marked_fulfilled()
+    {
+        var orderId = await SeedPlacedOrderAsync();
+        await using var db = new ShelfDbContext(_options);
+        var handler = new OrderFulfilment(db, _time, Options.Create(new FulfilmentOptions { SimulatedWorkMs = 300 }), NullLogger<OrderFulfilment>.Instance);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var result = await handler.HandleAsync(orderId);
+
+        Assert.That(result, Is.EqualTo(FulfilmentResult.Fulfilled));
+        Assert.That(clock.Elapsed, Is.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(250)), "the configured work delay did not run");
+    }
 }

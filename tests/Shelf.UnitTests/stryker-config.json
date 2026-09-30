@@ -1,0 +1,11 @@
+{
+  "stryker-config": {
+    "project": "Shelf.Fulfilment.csproj",
+    "mutate": [
+      "**/OrderFulfilment.cs",
+      "**/OrderPlacedConsumer.cs"
+    ],
+    "reporters": [ "progress", "cleartext", "html", "json", "markdown" ],
+    "thresholds": { "high": 80, "low": 60, "break": 0 }
+  }
+}
