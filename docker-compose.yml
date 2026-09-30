@@ -1,0 +1,78 @@
+# docker compose up --build
+#   storefront      http://localhost:3000
+#   API + Swagger   http://localhost:5080/swagger
+#   RabbitMQ UI     http://localhost:15672  (guest / guest)
+#   RavenDB Studio  http://localhost:8081
+#
+# The SQL Server password comes from MSSQL_SA_PASSWORD (put it in a .env file, see .env.example).
+# Shelf_LocalDev_Only1 is a local development default only. CI generates a fresh password on every run.
+
+x-sql-connection: &sql-connection "Server=sqlserver,1433;Database=Shelf;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Shelf_LocalDev_Only1};TrustServerCertificate=True"
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Shelf_LocalDev_Only1}
+    ports: ["1433:1433"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  ravendb:
+    image: ravendb/ravendb:7.2-ubuntu-latest
+    environment:
+      RAVEN_Setup_Mode: "None"
+      RAVEN_License_Eula_Accepted: "true"
+      RAVEN_Security_UnsecuredAccessAllowed: "PublicNetwork"
+      RAVEN_ServerUrl: "http://0.0.0.0:8080"
+    ports: ["8081:8080"]
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Shelf.Api/Dockerfile
+    image: shelf-api
+    environment:
+      ConnectionStrings__Orders: *sql-connection
+      RavenDb__Url: http://ravendb:8080
+      RabbitMq__Host: rabbitmq
+    ports: ["5080:8080"]
+    depends_on:
+      sqlserver: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      ravendb: { condition: service_started }
+
+  fulfilment:
+    build:
+      context: .
+      dockerfile: src/Shelf.Fulfilment/Dockerfile
+    image: shelf-fulfilment
+    environment:
+      ConnectionStrings__Orders: *sql-connection
+      RabbitMq__Host: rabbitmq
+      Fulfilment__SimulatedWorkMs: "2000"
+    depends_on:
+      sqlserver: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+  web:
+    build:
+      context: .
+      dockerfile: src/Shelf.Web/Dockerfile
+    image: shelf-web
+    ports: ["3000:80"]
+    depends_on: [api]
