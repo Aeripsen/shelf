@@ -10,7 +10,7 @@ public record OrderPlaced(Guid OrderId, decimal Total, DateTime PlacedAtUtc);
 public static class QueueNames
 {
     /// <summary>
-    /// The fulfilment worker's queue. The API also declares and binds it when it first publishes, so an order placed
+    /// The fulfilment worker's queue. The API also declares and binds it when its bus starts, so an order placed
     /// before the worker has ever started still waits in the queue instead of being dropped by the broker.
     /// </summary>
     public const string OrderPlaced = "order-placed";

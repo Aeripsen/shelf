@@ -64,10 +64,13 @@ builder.Services.AddMassTransit(x =>
         });
 
         // RabbitMQ drops a message published to an exchange with no queue bound. The worker's queue normally
-        // appears only when the worker first starts, so the publisher declares it and binds it to the OrderPlaced
-        // exchange as well. The worker's own binding goes through a second exchange; RabbitMQ still puts a message
-        // in a queue at most once, however many bindings lead there.
+        // appears only when the worker first starts, so the API declares it too and binds it to the OrderPlaced
+        // exchange. The worker's own binding goes through a second exchange; RabbitMQ still puts a message in a
+        // queue at most once, however many bindings lead there.
+        // DeployPublishTopology does this when the bus starts. It has to: the outbox delivery service sends each
+        // stored message to its exchange through a send endpoint, which never applies publish-side bindings.
         cfg.Publish<OrderPlaced>(p => p.BindQueue(p.Exchange.ExchangeName, QueueNames.OrderPlaced));
+        cfg.DeployPublishTopology = true;
     });
 });
 

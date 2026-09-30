@@ -13,7 +13,12 @@ MQ=${MQ:-http://localhost:15672}
 QUEUE_URL="$MQ/api/queues/%2F/order-placed"
 
 say() { printf '\n== %s\n' "$*"; }
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  echo "--- queues"; curl -s -u guest:guest "$MQ/api/queues" | python3 -m json.tool | grep -E '"name"|"messages"|"consumers"' || true
+  echo "--- bindings"; curl -s -u guest:guest "$MQ/api/bindings" | python3 -m json.tool | grep -E '"source"|"destination"' || true
+  exit 1
+}
 
 say "The fulfilment worker must not be running"
 if docker compose ps --status running --services | grep -qx fulfilment; then
@@ -29,10 +34,13 @@ for i in $(seq 1 60); do
 done
 curl -fsS "$API/health"; echo
 
-say "Before the first publish the queue does not exist (a fresh broker)"
-before=$(curl -s -o /dev/null -w '%{http_code}' -u guest:guest "$QUEUE_URL")
-echo "GET order-placed queue: HTTP $before"
-[ "$before" = 404 ] || fail "expected no order-placed queue yet, got HTTP $before"
+say "The API declared the worker's queue at startup; nothing consumes it yet"
+queue=$(curl -fsS -u guest:guest "$QUEUE_URL") || fail "the order-placed queue does not exist"
+consumers=$(printf '%s' "$queue" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("consumers", 0))')
+echo "order-placed exists, consumers=$consumers"
+[ "$consumers" = 0 ] || fail "expected no consumers before the worker starts"
+curl -fsS -u guest:guest "$MQ/api/exchanges/%2F/Shelf.Contracts%3AOrderPlaced/bindings/source" \
+  | python3 -c 'import json,sys; [print("binding:", b["source"], "->", b["destination_type"], b["destination"]) for b in json.load(sys.stdin)]'
 
 say "Placing an order"
 cart=$(python3 -c 'import uuid; print(uuid.uuid4())')

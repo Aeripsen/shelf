@@ -16,7 +16,8 @@ namespace Shelf.IntegrationTests;
 /// <summary>
 /// The real API, in memory, against the real SQL Server container, in its own database. Three things are swapped:
 /// the RavenDB catalogue becomes a fixed three-book fake (RavenDB itself is tested in RavenCatalogueTests),
-/// RabbitMQ becomes MassTransit's in-memory test harness, so the tests can see what the outbox delivered, and the
+/// RabbitMQ becomes MassTransit's in-memory test harness with a recorder consumer, so the tests see what the outbox
+/// actually delivered (the harness's Published list also records publishes that were only written to the outbox), and the
 /// RavenDB health check is removed because there is no RavenDB here. Everything else is Program.cs as shipped,
 /// including the transactional outbox and its delivery service.
 /// </summary>
@@ -53,9 +54,15 @@ public class ShelfApiFactory(string database, bool migrate = true) : WebApplicat
                 foreach (var raven in o.Registrations.Where(r => r.Name == RavenHealthCheck.Name).ToList())
                     o.Registrations.Remove(raven);
             });
-            services.AddMassTransitTestHarness();
+            services.AddMassTransitTestHarness(x => x.AddConsumer<OrderPlacedRecorder>());
         });
     }
+}
+
+/// <summary>Receives OrderPlaced from the in-memory bus, so a test can wait for real delivery by the outbox.</summary>
+public class OrderPlacedRecorder : IConsumer<Shelf.Contracts.OrderPlaced>
+{
+    public Task Consume(ConsumeContext<Shelf.Contracts.OrderPlaced> context) => Task.CompletedTask;
 }
 
 public class FakeCatalogue(params Book[] books) : ICatalogue

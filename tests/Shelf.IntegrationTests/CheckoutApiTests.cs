@@ -54,8 +54,19 @@ public class CheckoutApiTests
 
     private static string UniqueEmail() => $"reader-{Guid.NewGuid():N}@example.com";
 
-    private async Task<bool> OrderPlacedWasSent(Guid orderId) =>
-        await _harness.Published.Any<OrderPlaced>(m => m.Context.Message.OrderId == orderId);
+    /// <summary>
+    /// True once the outbox delivery service has sent OrderPlaced for this order and the recorder consumed it.
+    /// The harness's Published list is not used: it also records a publish that was only written to the outbox and
+    /// then rolled back.
+    /// </summary>
+    private async Task<bool> OrderPlacedWasDelivered(Guid orderId) =>
+        await _harness.GetConsumerHarness<OrderPlacedRecorder>().Consumed.Any<OrderPlaced>(m => m.Context.Message.OrderId == orderId);
+
+    private List<Guid> DeliveredSoFar() =>
+        _harness.GetConsumerHarness<OrderPlacedRecorder>().Consumed
+            .Select<OrderPlaced>(new CancellationToken(canceled: true))
+            .Select(m => m.Context.Message.OrderId)
+            .ToList();
 
     [Test]
     public async Task Checkout_saves_the_order_with_catalogue_prices_empties_the_cart_and_the_outbox_sends_OrderPlaced()
@@ -90,7 +101,8 @@ public class CheckoutApiTests
         Assert.That(cartItemsLeft, Is.EqualTo(0), "checkout empties the cart");
 
         // Sent by the outbox delivery service after the commit, not by the request itself.
-        Assert.That(await _harness.Published.Any<OrderPlaced>(m => m.Context.Message.OrderId == body.OrderId && m.Context.Message.Total == 33.97m), Is.True);
+        Assert.That(await _harness.GetConsumerHarness<OrderPlacedRecorder>().Consumed
+            .Any<OrderPlaced>(m => m.Context.Message.OrderId == body.OrderId && m.Context.Message.Total == 33.97m), Is.True);
     }
 
     [Test]
@@ -117,13 +129,12 @@ public class CheckoutApiTests
 
         var orders = await WithDb(db => db.Orders.Where(o => o.Email == email).Select(o => o.Id).ToListAsync());
         Assert.That(orders, Has.Count.EqualTo(1), "the losing checkout's order must roll back with its failed delete");
-        Assert.That(await OrderPlacedWasSent(orders[0]), Is.True);
+        Assert.That(await OrderPlacedWasDelivered(orders[0]), Is.True);
 
         // The loser also wrote an OrderPlaced to the outbox before its transaction failed. Give the delivery service
-        // ten polls, then check that every OrderPlaced it has ever sent in this fixture belongs to a committed order.
+        // ten polls, then check that every OrderPlaced it has delivered in this fixture belongs to a committed order.
         await Task.Delay(TimeSpan.FromSeconds(1));
-        var sent = _harness.Published.Select<OrderPlaced>(new CancellationToken(canceled: true))
-            .Select(m => m.Context.Message.OrderId).ToList();
+        var sent = DeliveredSoFar();
         var committed = await WithDb(db => db.Orders.CountAsync(o => sent.Contains(o.Id)));
         Assert.That(committed, Is.EqualTo(sent.Count), "an event was sent for an order that rolled back");
     }
@@ -149,7 +160,7 @@ public class CheckoutApiTests
         var orders = await WithDb(db => db.Orders.Where(o => o.Email == email).Select(o => o.Id).ToListAsync());
         Assert.That(orders, Is.EqualTo(new[] { body.OrderId }));
         Assert.That(await WithDb(db => db.CartItems.CountAsync(i => i.CartId == cartId)), Is.EqualTo(0));
-        Assert.That(await OrderPlacedWasSent(body.OrderId), Is.True, "the event committed with the order, so the outbox sends it");
+        Assert.That(await OrderPlacedWasDelivered(body.OrderId), Is.True, "the event committed with the order, so the outbox sends it");
     }
 
     [Test]
