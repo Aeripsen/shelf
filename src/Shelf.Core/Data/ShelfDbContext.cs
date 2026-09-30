@@ -1,3 +1,4 @@
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 
 namespace Shelf.Core.Data;
@@ -48,5 +49,10 @@ public class ShelfDbContext(DbContextOptions<ShelfDbContext> options) : DbContex
             e.HasKey(p => p.OrderId);
             e.Property(p => p.OrderId).ValueGeneratedNever();
         });
+
+        // MassTransit's transactional outbox. Checkout publishes OrderPlaced into OutboxMessage/OutboxState rows in
+        // the same SaveChanges as the order, and a background service in the API sends them to RabbitMQ afterwards.
+        // InboxState is part of the same schema; the fulfilment worker does not use it (it dedupes by OrderId).
+        b.AddTransactionalOutboxEntities();
     }
 }

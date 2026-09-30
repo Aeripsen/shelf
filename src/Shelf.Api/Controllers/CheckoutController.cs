@@ -50,13 +50,27 @@ public class CheckoutController(
         db.Orders.Add(order);
         db.CartItems.RemoveRange(items);
 
-        // One SaveChanges is one transaction: the new order and the emptied cart commit together or not at all.
-        // Each cart item is deleted with its rowversion in the WHERE clause, so if the cart changed after we read it
-        // (a quantity bumped in another tab, or a second checkout of the same cart) nothing is written and the
-        // shopper is asked to review the cart, instead of an order that no longer matches it.
+        // With the bus outbox this does not touch RabbitMQ. It adds an OutboxMessage row to this DbContext, so the
+        // event is saved by the SaveChanges below together with the order: both commit or neither does.
+        await publish.Publish(new OrderPlaced(order.Id, order.Total, order.PlacedAtUtc), ct);
+
+        // One transaction: the order, its lines, the emptied cart and the outbox row. Each cart item is deleted with
+        // its rowversion in the WHERE clause, so if the cart changed after we read it (a quantity bumped in another
+        // tab, or a second checkout of the same cart) nothing is written and the shopper is asked to review the cart.
+        //
+        // The connection retries transient errors. If the commit reaches SQL Server but the acknowledgement is lost,
+        // a plain retry would replay the batch against a cart that is already empty and report a conflict for an
+        // order that exists. verifySucceeded asks the database whether this order is there before retrying, which
+        // is EF Core's documented answer to that case.
         try
         {
-            await db.SaveChangesAsync(ct);
+            var strategy = db.Database.CreateExecutionStrategy();
+            await strategy.ExecuteInTransactionAsync(
+                (db, order.Id),
+                operation: (state, token) => state.db.SaveChangesAsync(acceptAllChangesOnSuccess: false, token),
+                verifySucceeded: (state, token) => state.db.Orders.AsNoTracking().AnyAsync(o => o.Id == state.Id, token),
+                ct);
+            db.ChangeTracker.AcceptAllChanges();
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -66,11 +80,7 @@ public class CheckoutController(
                 detail: "Your cart changed while you were checking out. Review it and place the order again.");
         }
 
-        // Published after the commit, so the worker never sees an order that is not in the database yet.
-        // Known gap: if the broker is unreachable right here, the order is saved but never published (a dual write).
-        // The fix is a transactional outbox; see Limitations in the README.
-        await publish.Publish(new OrderPlaced(order.Id, order.Total, order.PlacedAtUtc), ct);
-        log.LogInformation("Order {OrderId} placed, total {Total}, OrderPlaced published", order.Id, order.Total);
+        log.LogInformation("Order {OrderId} placed, total {Total}, OrderPlaced saved to the outbox", order.Id, order.Total);
 
         return Created($"/api/orders/{order.Id}", new CheckoutResponse(order.Id, order.Status, order.Total));
     }

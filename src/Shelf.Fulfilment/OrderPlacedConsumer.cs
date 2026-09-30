@@ -27,7 +27,8 @@ public class OrderPlacedConsumerDefinition : ConsumerDefinition<OrderPlacedConsu
 
     public OrderPlacedConsumerDefinition()
     {
-        EndpointName = "order-placed";
+        // Shared with the API, which declares and binds the same queue when it publishes.
+        EndpointName = QueueNames.OrderPlaced;
     }
 
     protected override void ConfigureConsumer(

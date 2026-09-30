@@ -7,8 +7,10 @@ namespace Shelf.Api.Controllers;
 [Route("api/books")]
 public class BooksController(ICatalogue catalogue) : ControllerBase
 {
+    /// <summary>The whole catalogue sorted by title, or with <c>q</c> a full-text search over title and author.</summary>
     [HttpGet]
-    public async Task<IReadOnlyList<Book>> GetAll(CancellationToken ct) => await catalogue.GetAllAsync(ct);
+    public async Task<IReadOnlyList<Book>> GetAll([FromQuery] string? q, CancellationToken ct) =>
+        string.IsNullOrWhiteSpace(q) ? await catalogue.GetAllAsync(ct) : await catalogue.SearchAsync(q, ct);
 
     [HttpGet("{slug}")]
     public async Task<ActionResult<Book>> Get(string slug, CancellationToken ct)

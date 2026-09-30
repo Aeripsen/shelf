@@ -7,6 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- MassTransit stays on 8.x: v8 is Apache 2.0, v9 is released under a commercial license.
+         Sources: https://masstransit.io/introduction/v9-announcement and the maintainer's post,
+         https://x.com/PhatBoyG/status/1907476970071273618 ("MT v8 remains open-source"). -->
     <PackageReference Include="MassTransit.RabbitMQ" Version="8.5.11" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
   </ItemGroup>

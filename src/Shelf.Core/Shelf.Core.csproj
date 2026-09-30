@@ -1,11 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Shelf.Contracts\Shelf.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.31" />
+    <!-- MassTransit stays on 8.x: v8 is Apache 2.0, v9 is released under a commercial license.
+         Sources: https://masstransit.io/introduction/v9-announcement and the maintainer's post,
+         https://x.com/PhatBoyG/status/1907476970071273618 ("MT v8 remains open-source"). -->
+    <PackageReference Include="MassTransit.EntityFrameworkCore" Version="8.5.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.20" />
   </ItemGroup>
 
   <PropertyGroup>

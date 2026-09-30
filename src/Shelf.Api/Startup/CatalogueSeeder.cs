@@ -7,9 +7,9 @@ using Shelf.Api.Catalogue;
 namespace Shelf.Api.Startup;
 
 /// <summary>
-/// Creates the RavenDB database if it is missing and stores every book from seed/books.json under its fixed id.
-/// Storing by fixed id overwrites, so running the seed twice gives the same catalogue.
-/// Turned off with Startup:SeedCatalogue=false (the integration tests do this and fake the catalogue instead).
+/// Creates the RavenDB database if it is missing, stores every book from seed/books.json under its fixed id, and
+/// deploys the Books/Search index. Storing by fixed id overwrites, so running the seed twice gives the same catalogue.
+/// Turned off with Startup:SeedCatalogue=false (the API integration tests do this and fake the catalogue instead).
 /// </summary>
 public class CatalogueSeeder(IServiceProvider services, IConfiguration config, ILogger<CatalogueSeeder> log) : IHostedService
 {
@@ -23,19 +23,15 @@ public class CatalogueSeeder(IServiceProvider services, IConfiguration config, I
             return;
         }
 
-        var books = LoadSeed();
         var store = services.GetRequiredService<IDocumentStore>();
+        var books = LoadSeed();
 
         // RavenDB can still be starting when the API starts, so retry for about a minute.
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                await EnsureDatabaseAsync(store, ct);
-                using var session = store.OpenAsyncSession();
-                foreach (var book in books)
-                    await session.StoreAsync(book, book.Id, ct);
-                await session.SaveChangesAsync(ct);
+                await SeedAsync(store, books, ct);
                 log.LogInformation("Seeded {Count} books into RavenDB database {Database}", books.Count, store.Database);
                 return;
             }
@@ -48,6 +44,21 @@ public class CatalogueSeeder(IServiceProvider services, IConfiguration config, I
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>One seed pass. Public so the RavenDB integration tests run exactly this against a real server.</summary>
+    public static async Task SeedAsync(IDocumentStore store, IReadOnlyList<BookDocument> books, CancellationToken ct = default)
+    {
+        await EnsureDatabaseAsync(store, ct);
+
+        using (var session = store.OpenAsyncSession())
+        {
+            foreach (var book in books)
+                await session.StoreAsync(book, book.Id, ct);
+            await session.SaveChangesAsync(ct);
+        }
+
+        await new Books_Search().ExecuteAsync(store, token: ct);
+    }
 
     public static List<BookDocument> LoadSeed()
     {
