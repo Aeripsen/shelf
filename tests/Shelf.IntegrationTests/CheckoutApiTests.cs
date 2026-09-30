@@ -59,8 +59,21 @@ public class CheckoutApiTests
     /// The harness's Published list is not used: it also records a publish that was only written to the outbox and
     /// then rolled back.
     /// </summary>
-    private async Task<bool> OrderPlacedWasDelivered(Guid orderId) =>
-        await _harness.GetConsumerHarness<OrderPlacedRecorder>().Consumed.Any<OrderPlaced>(m => m.Context.Message.OrderId == orderId);
+    /// <remarks>
+    /// Polls for up to 15 seconds. The harness's own Consumed.Any gives up as soon as the bus has been idle for a
+    /// moment, and with the outbox the delivery comes a poll after the commit, on a quiet bus.
+    /// </remarks>
+    private async Task<bool> OrderPlacedWasDelivered(Guid orderId)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (DeliveredSoFar().Contains(orderId))
+                return true;
+            await Task.Delay(100);
+        }
+        return false;
+    }
 
     private List<Guid> DeliveredSoFar() =>
         _harness.GetConsumerHarness<OrderPlacedRecorder>().Consumed
@@ -101,35 +114,38 @@ public class CheckoutApiTests
         Assert.That(cartItemsLeft, Is.EqualTo(0), "checkout empties the cart");
 
         // Sent by the outbox delivery service after the commit, not by the request itself.
-        Assert.That(await _harness.GetConsumerHarness<OrderPlacedRecorder>().Consumed
-            .Any<OrderPlaced>(m => m.Context.Message.OrderId == body.OrderId && m.Context.Message.Total == 33.97m), Is.True);
+        Assert.That(await OrderPlacedWasDelivered(body.OrderId), Is.True);
+        var delivered = _harness.GetConsumerHarness<OrderPlacedRecorder>().Consumed
+            .Select<OrderPlaced>(new CancellationToken(canceled: true)).First(m => m.Context.Message.OrderId == body.OrderId);
+        Assert.That(delivered.Context.Message.Total, Is.EqualTo(33.97m));
     }
 
     [Test]
     public async Task A_publish_whose_transaction_never_commits_is_never_delivered_and_one_that_commits_is()
     {
-        // The outbox itself, without the API around it: the same scoped IPublishEndpoint and ShelfDbContext the
-        // checkout controller gets. Without the outbox, the first publish would reach the bus at once.
-        var discarded = Guid.NewGuid();
-        var saved = Guid.NewGuid();
-
-        using (var scope = _factory.Services.CreateScope())
+        // The outbox itself, without the controller: the same scoped IPublishEndpoint and ShelfDbContext that
+        // checkout gets. Each scope adds an order and publishes its event; only the second one saves.
+        // Without the outbox, the first event would reach the bus at once.
+        async Task<Guid> PlaceAsync(bool save)
         {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ShelfDbContext>();
             var publish = scope.ServiceProvider.GetRequiredService<MassTransit.IPublishEndpoint>();
-            await publish.Publish(new OrderPlaced(discarded, 1m, DateTime.UtcNow));
-            // No SaveChanges: the scope ends and the outbox row is never written.
+            var order = new Order { Id = Guid.NewGuid(), Email = UniqueEmail(), Status = OrderStatus.Placed, Total = 7.99m, PlacedAtUtc = DateTime.UtcNow };
+            db.Orders.Add(order);
+            await publish.Publish(new OrderPlaced(order.Id, order.Total, order.PlacedAtUtc));
+            if (save)
+                await db.SaveChangesAsync();
+            return order.Id;
         }
 
-        using (var scope = _factory.Services.CreateScope())
-        {
-            var publish = scope.ServiceProvider.GetRequiredService<MassTransit.IPublishEndpoint>();
-            await publish.Publish(new OrderPlaced(saved, 1m, DateTime.UtcNow));
-            await scope.ServiceProvider.GetRequiredService<ShelfDbContext>().SaveChangesAsync();
-        }
+        var discarded = await PlaceAsync(save: false);
+        var saved = await PlaceAsync(save: true);
 
         Assert.That(await OrderPlacedWasDelivered(saved), Is.True, "the committed publish was never delivered");
-        await Task.Delay(TimeSpan.FromSeconds(1)); // ten outbox polls
+        await Task.Delay(TimeSpan.FromSeconds(1)); // ten more outbox polls
         Assert.That(DeliveredSoFar(), Does.Not.Contain(discarded));
+        Assert.That(await WithDb(db => db.Orders.AnyAsync(o => o.Id == discarded)), Is.False);
     }
 
     [Test]
