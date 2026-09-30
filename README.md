@@ -79,7 +79,7 @@ From source both services use the development connection string with the default
 Integration tests need Docker. To use an existing SQL Server instead of starting a container, set `SHELF_TEST_SQL` to
 its connection string.
 
-Latest counts, from CI run 36770628916 on 2026-09-30 (commit df1a0d0): 30 unit tests, 12 integration tests and 3
+Latest counts, from CI run 36772689586 on 2026-09-30 (commit 56fae41): 32 unit tests, 14 integration tests and 3
 Playwright tests, all passing.
 
 ## Design notes
