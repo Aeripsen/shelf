@@ -26,6 +26,8 @@ test('browse, add to cart, check out, and watch the order go from Placed to Fulf
   await expect(page.getByRole('heading', { name: 'Order confirmed' })).toBeVisible()
   await expect(page).toHaveURL(/\/orders\/[0-9a-f-]{36}$/)
   await expect(page.getByTestId('order-total')).toHaveText(price)
+  // The purchase is complete before fulfilment has run: the page first shows Placed, then the status changes.
+  await expect(page.getByTestId('order-status')).toHaveText('Placed')
   await expect(page.getByTestId('order-status')).toHaveText('Fulfilled', { timeout: 30_000 })
 
   // The cart was emptied in the same transaction that saved the order.
