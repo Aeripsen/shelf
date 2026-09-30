@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Shelf.Api.Catalogue;
+using Shelf.Api.Messaging;
 using Shelf.Core.Catalogue;
 
 namespace Shelf.IntegrationTests;
@@ -54,7 +55,12 @@ public class ShelfApiFactory(string database, bool migrate = true) : WebApplicat
                 foreach (var raven in o.Registrations.Where(r => r.Name == RavenHealthCheck.Name).ToList())
                     o.Registrations.Remove(raven);
             });
-            services.AddMassTransitTestHarness(x => x.AddConsumer<OrderPlacedRecorder>());
+            // The harness removes the app's MassTransit registrations, the outbox included, so add it back.
+            services.AddMassTransitTestHarness(x =>
+            {
+                x.AddShelfOutbox(TimeSpan.FromMilliseconds(100));
+                x.AddConsumer<OrderPlacedRecorder>();
+            });
         });
     }
 }

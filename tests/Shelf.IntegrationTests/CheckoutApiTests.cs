@@ -106,6 +106,33 @@ public class CheckoutApiTests
     }
 
     [Test]
+    public async Task A_publish_whose_transaction_never_commits_is_never_delivered_and_one_that_commits_is()
+    {
+        // The outbox itself, without the API around it: the same scoped IPublishEndpoint and ShelfDbContext the
+        // checkout controller gets. Without the outbox, the first publish would reach the bus at once.
+        var discarded = Guid.NewGuid();
+        var saved = Guid.NewGuid();
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var publish = scope.ServiceProvider.GetRequiredService<MassTransit.IPublishEndpoint>();
+            await publish.Publish(new OrderPlaced(discarded, 1m, DateTime.UtcNow));
+            // No SaveChanges: the scope ends and the outbox row is never written.
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var publish = scope.ServiceProvider.GetRequiredService<MassTransit.IPublishEndpoint>();
+            await publish.Publish(new OrderPlaced(saved, 1m, DateTime.UtcNow));
+            await scope.ServiceProvider.GetRequiredService<ShelfDbContext>().SaveChangesAsync();
+        }
+
+        Assert.That(await OrderPlacedWasDelivered(saved), Is.True, "the committed publish was never delivered");
+        await Task.Delay(TimeSpan.FromSeconds(1)); // ten outbox polls
+        Assert.That(DeliveredSoFar(), Does.Not.Contain(discarded));
+    }
+
+    [Test]
     public async Task Two_concurrent_checkouts_of_one_cart_give_one_201_one_409_and_one_order()
     {
         using var client = NewCartClient(out var cartId);

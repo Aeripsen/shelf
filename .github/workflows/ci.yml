@@ -102,8 +102,9 @@ jobs:
         run: docker compose up -d sqlserver ravendb rabbitmq api web
 
       # On a fresh broker: place an order before the worker has ever run, see the event wait in its queue, start
-      # the worker, see the order fulfilled. This also starts the worker for the browser tests below.
-      - name: Cold start, order placed before the worker exists
+      # the worker, see the order fulfilled. Then stop RabbitMQ, check out, start it again, see that order fulfilled.
+      # This also starts the worker for the browser tests below.
+      - name: Cold start and broker outage checks
         run: bash e2e/cold-start-check.sh
 
       - name: Wait for the storefront proxy

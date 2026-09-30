@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Places an order on a brand-new broker before the fulfilment worker has ever started, checks that the event waits
-# in the order-placed queue, then starts the worker and checks that the order becomes Fulfilled.
+# Two failure scenarios against the running stack:
+# 1. On a brand-new broker, an order placed before the fulfilment worker has ever started: the event waits in the
+#    order-placed queue, and the order becomes Fulfilled once the worker starts.
+# 2. With RabbitMQ stopped, checkout still answers 201 (the event goes to the outbox table), and the order becomes
+#    Fulfilled once RabbitMQ is back.
 #
 # Run from the repo root with the stack up except the worker:
 #   docker compose up -d --build sqlserver ravendb rabbitmq api web
@@ -75,3 +78,32 @@ for i in $(seq 1 45); do
 done
 echo "order $order is $status"
 echo "PASS: an order placed before the worker ever ran was kept and fulfilled"
+
+# Second scenario: the broker is down at checkout. With the transactional outbox, checkout only writes to SQL
+# Server, so it still answers 201, and the event is sent once RabbitMQ is back.
+say "Stopping RabbitMQ"
+docker compose stop rabbitmq
+
+say "Placing an order while the broker is down"
+cart=$(python3 -c 'import uuid; print(uuid.uuid4())')
+curl -fsS -X POST "$API/api/cart/items" -H "X-Cart-Id: $cart" -H 'Content-Type: application/json' \
+  -d '{"bookId":"emma","quantity":1}' >/dev/null
+code=$(curl -s -o /tmp/shelf-checkout.json -w '%{http_code}' --max-time 30 -X POST "$API/api/checkout" \
+  -H "X-Cart-Id: $cart" -H 'Content-Type: application/json' -d '{"email":"broker-down@example.com"}')
+cat /tmp/shelf-checkout.json; echo
+echo "checkout with the broker down: HTTP $code"
+[ "$code" = 201 ] || fail "checkout needed the broker"
+order=$(python3 -c 'import json; print(json.load(open("/tmp/shelf-checkout.json"))["orderId"])')
+
+say "Starting RabbitMQ again"
+docker compose start rabbitmq
+
+say "Waiting for the order to become Fulfilled"
+for i in $(seq 1 60); do
+  status=$(curl -fsS "$API/api/orders/$order" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+  if [ "$status" = Fulfilled ]; then break; fi
+  [ "$i" = 60 ] && { docker compose logs --tail 80 api fulfilment; fail "order stayed $status after the broker came back"; }
+  sleep 3
+done
+echo "order $order is $status"
+echo "PASS: checkout succeeded with the broker down, and the outbox sent the event once it was back"

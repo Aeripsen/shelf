@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Raven.Client.Documents;
 using Shelf.Api.Catalogue;
+using Shelf.Api.Messaging;
 using Shelf.Api.Startup;
 using Shelf.Contracts;
 using Shelf.Core.Catalogue;
@@ -44,15 +45,9 @@ builder.Services.AddHealthChecks()
 
 builder.Services.AddMassTransit(x =>
 {
-    // Transactional outbox: IPublishEndpoint inside a request writes to the OutboxMessage table through the
-    // request's ShelfDbContext, so the message commits or rolls back with the order. A hosted service reads the
-    // table and sends to RabbitMQ, and keeps retrying if the broker is down.
-    x.AddEntityFrameworkOutbox<ShelfDbContext>(o =>
-    {
-        o.UseSqlServer();
-        o.UseBusOutbox();
-        o.QueryDelay = TimeSpan.FromMilliseconds(builder.Configuration.GetValue("Outbox:QueryDelayMs", 1000));
-    });
+    // Transactional outbox: publishing inside a request writes to the OutboxMessage table in the same transaction
+    // as the order; a hosted service sends it to RabbitMQ afterwards. See OutboxRegistration.
+    x.AddShelfOutbox(TimeSpan.FromMilliseconds(builder.Configuration.GetValue("Outbox:QueryDelayMs", 1000)));
 
     x.UsingRabbitMq((context, cfg) =>
     {
