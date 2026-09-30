@@ -16,9 +16,17 @@ export function App() {
     }
   }, [])
 
+  // Load the cart once on start. The state is set in the promise callback, after the effect has returned.
   useEffect(() => {
-    void refreshCart()
-  }, [refreshCart])
+    let stopped = false
+    api
+      .cart()
+      .then((loaded) => !stopped && setCart(loaded))
+      .catch(() => !stopped && setCart(null))
+    return () => {
+      stopped = true
+    }
+  }, [])
 
   const count = cart?.items.reduce((sum, line) => sum + line.quantity, 0) ?? 0
 

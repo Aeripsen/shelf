@@ -2,36 +2,37 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api, ApiError, money, type Order } from '../api'
 
-// Checkout returns as soon as the order is saved and OrderPlaced is published. Fulfilment happens later in the
+// Checkout returns as soon as the order and its OrderPlaced outbox row are saved. Fulfilment happens later in the
 // worker, so this page polls the order until its status turns from Placed to Fulfilled.
 export function OrderPage() {
   const { id = '' } = useParams()
-  const [order, setOrder] = useState<Order | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // Both pieces of state remember which order id they belong to, so after navigating to a different order the
+  // previous order's details and errors are never shown while the new one loads.
+  const [loaded, setOrder] = useState<Order | null>(null)
+  const [failure, setFailure] = useState<{ id: string; message: string } | null>(null)
+  const order = loaded?.orderId.toLowerCase() === id.toLowerCase() ? loaded : null
+  const error = failure?.id === id ? failure.message : null
 
   useEffect(() => {
     let stopped = false
     let timer: number | undefined
-    // A different order id: never show the previous order's details while the new one loads.
-    setOrder(null)
-    setError(null)
 
     async function poll() {
       try {
         const latest = await api.order(id)
         if (stopped) return
         setOrder(latest)
-        setError(null)
+        setFailure(null)
         if (latest.status !== 'Fulfilled') timer = window.setTimeout(poll, 1000)
       } catch (e) {
         if (stopped) return
         if (e instanceof ApiError && e.status === 404) {
           setOrder(null)
-          setError('Order not found.')
+          setFailure({ id, message: 'Order not found.' })
           return
         }
         // A network blip or a 5xx: keep showing the last known order and try again shortly.
-        setError('Could not refresh the order, retrying...')
+        setFailure({ id, message: 'Could not refresh the order, retrying...' })
         timer = window.setTimeout(poll, 2000)
       }
     }

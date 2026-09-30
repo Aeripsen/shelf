@@ -151,7 +151,14 @@ button.link {
   width: 100%;
 }
 
-.checkout input {
+.search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.checkout input,
+.search input {
   font: inherit;
   padding: 8px;
   border: 1px solid var(--line);

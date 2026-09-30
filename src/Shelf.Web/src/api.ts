@@ -104,7 +104,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  books: () => request<Book[]>('/api/books'),
+  books: (query = '') => request<Book[]>(query.trim() ? `/api/books?q=${encodeURIComponent(query.trim())}` : '/api/books'),
   cart: () => request<Cart>('/api/cart'),
   addToCart: (bookId: string, quantity = 1) =>
     request<Cart>('/api/cart/items', { method: 'POST', body: JSON.stringify({ bookId, quantity }) }),

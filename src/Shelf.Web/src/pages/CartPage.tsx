@@ -65,7 +65,7 @@ export function CartPage({ cart, onCartChanged, refreshCart }: Props) {
                 <td>{money(line.unitPrice)}</td>
                 <td>{money(line.lineTotal)}</td>
                 <td>
-                  <button className="link" onClick={() => void remove(line.bookId)}>
+                  <button className="link" data-testid={`remove-${line.bookId}`} onClick={() => void remove(line.bookId)}>
                     Remove
                   </button>
                 </td>

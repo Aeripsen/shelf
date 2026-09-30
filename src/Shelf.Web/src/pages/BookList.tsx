@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { api, ApiError, money, type Book, type Cart } from '../api'
 
 type Props = {
@@ -10,13 +10,21 @@ export function BookList({ onCartChanged }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [added, setAdded] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [searched, setSearched] = useState('')
 
   useEffect(() => {
     api
-      .books()
+      .books(searched)
       .then(setBooks)
       .catch((e: unknown) => setError(e instanceof ApiError ? e.message : 'Could not load the catalogue.'))
-  }, [])
+  }, [searched])
+
+  function search(event: FormEvent) {
+    event.preventDefault()
+    setError(null)
+    setSearched(query.trim())
+  }
 
   async function add(book: Book) {
     setBusy(book.slug)
@@ -37,6 +45,23 @@ export function BookList({ onCartChanged }: Props) {
   return (
     <section>
       <h1>Books</h1>
+      <form className="search" role="search" onSubmit={search}>
+        <input
+          aria-label="Search by title or author"
+          data-testid="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by title or author"
+        />
+        <button type="submit" data-testid="search-submit">
+          Search
+        </button>
+      </form>
+      {searched && books.length === 0 && (
+        <p className="muted" data-testid="no-results">
+          No books match "{searched}".
+        </p>
+      )}
       {added && (
         <p className="notice" data-testid="added-notice">
           Added {added} to your cart.

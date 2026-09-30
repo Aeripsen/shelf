@@ -22,27 +22,45 @@ jobs:
         with:
           name: unit-test-results
           path: tests/Shelf.UnitTests/TestResults/*.trx
-          retention-days: 7
+          retention-days: 90
 
   integration:
-    name: NUnit integration tests (SQL Server in a container)
+    name: NUnit integration tests (SQL Server and RavenDB in containers)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
-      # Testcontainers starts mcr.microsoft.com/mssql/server:2022-latest on the runner's Docker.
+      # Testcontainers starts mcr.microsoft.com/mssql/server:2022-latest and ravendb/ravendb:7.2-ubuntu-latest on
+      # the runner's Docker.
       - run: dotnet test tests/Shelf.IntegrationTests --logger "console;verbosity=normal" --logger "trx;LogFileName=integration.trx"
       - if: always()
         uses: actions/upload-artifact@v7
         with:
           name: integration-test-results
           path: tests/Shelf.IntegrationTests/TestResults/*.trx
-          retention-days: 7
+          retention-days: 90
+
+  web:
+    name: Storefront lint and strict TypeScript build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/Shelf.Web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/Shelf.Web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
 
   e2e:
-    name: Docker images + Playwright end-to-end tests
+    name: Docker images, cold-start check and Playwright end-to-end tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -53,29 +71,25 @@ jobs:
           echo "::add-mask::$PW"
           echo "MSSQL_SA_PASSWORD=$PW" >> "$GITHUB_ENV"
 
+      # Built here to run the stack; nothing is pushed to a registry.
       - name: Build Docker images (api, fulfilment, web)
         run: docker compose build
 
-      - name: Start the stack
-        run: docker compose up -d
+      - name: Start the stack without the fulfilment worker
+        run: docker compose up -d sqlserver ravendb rabbitmq api web
 
-      - name: Wait for the API through the storefront proxy
+      # On a fresh broker: place an order before the worker has ever run, see the event wait in its queue, start
+      # the worker, see the order fulfilled. This also starts the worker for the browser tests below.
+      - name: Cold start, order placed before the worker exists
+        run: bash e2e/cold-start-check.sh
+
+      - name: Wait for the storefront proxy
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 30); do
             if curl -fsS http://localhost:3000/api/books | grep -q pride-and-prejudice; then exit 0; fi
-            sleep 3
+            sleep 2
           done
-          docker compose ps; docker compose logs api; exit 1
-
-      # On a new broker an OrderPlaced published before the worker has bound its queue would have nowhere to go,
-      # so wait until the order-placed queue has a consumer.
-      - name: Wait for the fulfilment worker to consume order-placed
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS -u guest:guest http://localhost:15672/api/queues/%2F/order-placed | grep -q '"consumers":[1-9]'; then exit 0; fi
-            sleep 3
-          done
-          docker compose logs fulfilment; exit 1
+          docker compose logs web api; exit 1
 
       - uses: actions/setup-node@v7
         with:
@@ -97,12 +111,22 @@ jobs:
         if: failure()
         run: docker compose logs
 
+      # The report holds each test's video, trace and step screenshots; demo/ holds the named step screenshots.
       - if: always()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: e2e/playwright-report
-          retention-days: 7
+          retention-days: 90
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-demo
+          path: |
+            e2e/demo
+            e2e/test-results/**/*.webm
+            e2e/test-results/**/trace.zip
+          retention-days: 90
 
       - if: always()
         run: docker compose down -v

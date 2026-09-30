@@ -55,8 +55,8 @@ services:
       sqlserver: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       ravendb: { condition: service_started }
-      # Start the worker first so its order-placed queue is usually bound before the first checkout (see README).
-      fulfilment: { condition: service_started }
+    # No dependency on the worker: the API declares the order-placed queue itself (see README), so orders placed
+    # while the worker is down or not yet started wait in the queue.
 
   fulfilment:
     build:
