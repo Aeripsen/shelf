@@ -33,6 +33,31 @@ public class CartController(ShelfDbContext db, ICatalogue catalogue, TimeProvide
         if (book is null)
             return Problem(statusCode: 400, title: "Unknown book", detail: CheckoutValidator.UnknownBook(request.BookId));
 
+        // Read, modify, save, and start again from a fresh read if another request changed the same cart in between:
+        // a stale quantity update fails on the rowversion, and a second "first add" fails on the primary key or the
+        // (CartId, BookId) unique index. Without this, two quick clicks could lose one of the additions.
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var rejected = await AddOnceAsync(cartId, book.Slug, request.Quantity, ct);
+                if (rejected is not null)
+                    return rejected;
+                break;
+            }
+            catch (DbUpdateException ex) when (attempt < MaxAddAttempts && (ex is DbUpdateConcurrencyException || SqlErrors.IsDuplicateKey(ex)))
+            {
+                db.ChangeTracker.Clear();
+            }
+        }
+
+        return await BuildViewAsync(cartId, ct);
+    }
+
+    private const int MaxAddAttempts = 10;
+
+    private async Task<ObjectResult?> AddOnceAsync(Guid cartId, string slug, int quantity, CancellationToken ct)
+    {
         var cart = await db.Carts.Include(c => c.Items).SingleOrDefaultAsync(c => c.Id == cartId, ct);
         if (cart is null)
         {
@@ -41,18 +66,18 @@ public class CartController(ShelfDbContext db, ICatalogue catalogue, TimeProvide
         }
 
         // Store the catalogue's own slug, not whatever casing the client sent.
-        var item = cart.Items.SingleOrDefault(i => i.BookId == book.Slug);
-        var newQuantity = (item?.Quantity ?? 0) + request.Quantity;
+        var item = cart.Items.SingleOrDefault(i => i.BookId == slug);
+        var newQuantity = (item?.Quantity ?? 0) + quantity;
         if (newQuantity > CheckoutValidator.MaxQuantity)
-            return Problem(statusCode: 400, title: "Bad quantity", detail: CheckoutValidator.BadQuantity(book.Slug));
+            return Problem(statusCode: 400, title: "Bad quantity", detail: CheckoutValidator.BadQuantity(slug));
 
         if (item is null)
-            cart.Items.Add(new CartItem { BookId = book.Slug, Quantity = request.Quantity });
+            cart.Items.Add(new CartItem { BookId = slug, Quantity = quantity });
         else
             item.Quantity = newQuantity;
 
         await db.SaveChangesAsync(ct);
-        return await BuildViewAsync(cartId, ct);
+        return null;
     }
 
     [HttpDelete("items/{bookId}")]
@@ -61,11 +86,22 @@ public class CartController(ShelfDbContext db, ICatalogue catalogue, TimeProvide
         if (!CartHeader.TryRead(Request, out var cartId))
             return MissingCartId();
 
-        var item = await db.CartItems.SingleOrDefaultAsync(i => i.CartId == cartId && i.BookId == bookId, ct);
-        if (item is not null)
+        for (var attempt = 1; ; attempt++)
         {
-            db.CartItems.Remove(item);
-            await db.SaveChangesAsync(ct);
+            var item = await db.CartItems.SingleOrDefaultAsync(i => i.CartId == cartId && i.BookId == bookId, ct);
+            if (item is null)
+                break;
+            try
+            {
+                db.CartItems.Remove(item);
+                await db.SaveChangesAsync(ct);
+                break;
+            }
+            catch (DbUpdateConcurrencyException) when (attempt < MaxAddAttempts)
+            {
+                // The line changed or was removed by another request since we read it; read it again.
+                db.ChangeTracker.Clear();
+            }
         }
 
         return await BuildViewAsync(cartId, ct);

@@ -83,7 +83,7 @@ public class CheckoutApiTests
         });
 
         var cartItemsLeft = await WithDb(db => db.CartItems.CountAsync(i => i.CartId == cartId));
-        Assert.That(cartItemsLeft, Is.EqualTo(0), "the order and the emptied cart commit together");
+        Assert.That(cartItemsLeft, Is.EqualTo(0), "checkout empties the cart");
 
         Assert.That(await _harness.Published.Any<OrderPlaced>(m => m.Context.Message.OrderId == body.OrderId && m.Context.Message.Total == 33.97m), Is.True);
     }
@@ -137,6 +137,39 @@ public class CheckoutApiTests
         var cart = (await response.Content.ReadFromJsonAsync<CartView>(Json))!;
         Assert.That(cart.Items.Select(i => (i.BookId, i.Quantity, i.UnitPrice, i.LineTotal)), Is.EqualTo(new[] { ("emma", 3, 11.50m, 34.50m) }));
         Assert.That(cart.Total, Is.EqualTo(34.50m));
+    }
+
+    [Test]
+    public async Task Concurrent_adds_to_a_new_cart_are_all_kept()
+    {
+        // Five simultaneous "add one copy" calls on a cart that does not exist yet. They race to create the cart,
+        // to insert the line, and to bump its quantity; the retry on rowversion and key conflicts must keep all five.
+        using var client = NewCartClient(out var cartId);
+
+        var responses = await Task.WhenAll(Enumerable.Range(0, 5)
+            .Select(_ => client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 1 })));
+
+        Assert.That(responses.Select(r => r.StatusCode), Is.All.EqualTo(HttpStatusCode.OK));
+        var quantity = await WithDb(db => db.CartItems.Where(i => i.CartId == cartId).Select(i => i.Quantity).SingleAsync());
+        Assert.That(quantity, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task Deleting_a_cart_line_read_before_another_change_fails_on_the_rowversion()
+    {
+        using var client = NewCartClient(out var cartId);
+        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 1 })).EnsureSuccessStatusCode();
+
+        // Simulate the race directly: a context reads the cart line, then another request changes it, then the
+        // first context tries to delete what it read. The rowversion makes that delete fail rather than succeed.
+        using var scope = _factory.Services.CreateScope();
+        var staleDb = scope.ServiceProvider.GetRequiredService<ShelfDbContext>();
+        var staleItem = await staleDb.CartItems.SingleAsync(i => i.CartId == cartId);
+        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 1 })).EnsureSuccessStatusCode();
+        staleDb.CartItems.Remove(staleItem);
+
+        Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => staleDb.SaveChangesAsync());
+        Assert.That(await WithDb(db => db.CartItems.Where(i => i.CartId == cartId).Select(i => i.Quantity).SingleAsync()), Is.EqualTo(2));
     }
 
     [Test]

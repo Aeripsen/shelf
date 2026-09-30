@@ -63,15 +63,17 @@ The SQL Server password comes from `MSSQL_SA_PASSWORD` (copy `.env.example` to `
 local development default, `Shelf_LocalDev_Only1`, which is only for your own machine.
 
 To run the API or the worker from source instead, start the infrastructure with
-`docker compose up -d sqlserver ravendb rabbitmq`, then `dotnet run --project src/Shelf.Api` (port 5080) and
-`dotnet run --project src/Shelf.Fulfilment`, and `npm run dev` in `src/Shelf.Web` (port 5173, proxies `/api`).
+`docker compose up -d sqlserver ravendb rabbitmq`, then `dotnet run --project src/Shelf.Fulfilment`,
+`dotnet run --project src/Shelf.Api` (port 5080), and `npm run dev` in `src/Shelf.Web` (port 5173, proxies `/api`).
+From source both services use the development connection string with the default password. If you set your own
+`MSSQL_SA_PASSWORD`, also set `ConnectionStrings__Orders` for both processes to match.
 
 ## Tests
 
 | Level | Command | What it covers |
 | --- | --- | --- |
-| Unit (NUnit) | `dotnet test tests/Shelf.UnitTests` | Pricing in decimal, checkout validation, prices snapshotted from the catalogue, the fulfilment handler being a no-op on redelivery, and the real consumer and retry policy on MassTransit's in-memory test harness (one transient failure is retried and no `Fault` is published) |
-| Integration (NUnit) | `dotnet test tests/Shelf.IntegrationTests` | The real API in memory (`WebApplicationFactory`) against SQL Server 2022 in a container (Testcontainers). The committed migrations are applied, checkout writes the order and lines with catalogue prices, empties the cart and publishes `OrderPlaced`, a price sent by the client is ignored, and two copies of one message racing on real SQL Server fulfil the order exactly once |
+| Unit (NUnit) | `dotnet test tests/Shelf.UnitTests` | Pricing in decimal, checkout validation, prices snapshotted from the catalogue, the fulfilment handler being a no-op on redelivery, and the real consumer and retry policy on MassTransit's in-memory test harness (a transient failure is retried with no `Fault` published, and two failures take the configured 1 s plus 5 s before success) |
+| Integration (NUnit) | `dotnet test tests/Shelf.IntegrationTests` | The real API in memory (`WebApplicationFactory`) against SQL Server 2022 in a container (Testcontainers). The committed migrations are applied, checkout writes the order and lines with catalogue prices, empties the cart and publishes `OrderPlaced`, a price sent by the client is ignored, five concurrent adds to one cart all count, a stale cart delete fails on the rowversion, and two copies of one message racing on real SQL Server fulfil the order exactly once |
 | End to end (Playwright) | `docker compose up -d --build`, then `npm ci && npx playwright test` in `e2e` | A real browser against the full stack: browse, add to cart, check out, see the confirmation showing Placed, then watch it turn to Fulfilled when the worker finishes |
 
 Integration tests need Docker. To use an existing SQL Server instead of starting a container, set `SHELF_TEST_SQL` to
@@ -83,15 +85,18 @@ Playwright tests, all passing.
 ## Design notes
 
 **Why a queue between checkout and fulfilment.** A direct call would tie the purchase to fulfilment's speed and
-uptime. With RabbitMQ in between, checkout only needs SQL Server and the broker; it returns `Placed` straight away
-and the worker catches up. If the worker is down, the message waits in its durable queue. The cost is eventual
+uptime. With RabbitMQ in between, checkout needs RavenDB (for prices), SQL Server and the broker, but not the
+worker; it returns `Placed` straight away and the worker catches up. Once the worker has created its `order-placed`
+queue, the queue is durable, so if the worker is down later the messages wait there. The cost is eventual
 consistency: the order shows `Placed` for a moment before `Fulfilled`, and the confirmation page shows exactly that.
 
 **Idempotent handling.** RabbitMQ delivers at least once, so the same `OrderPlaced` can arrive twice. The worker keeps
 a `ProcessedMessages` table keyed by `OrderId`. It checks the table first and does nothing if the order is there.
 Otherwise it marks the order `Fulfilled` and inserts the row in the same `SaveChanges`, which is one transaction. If
 two copies race past the check, the second insert hits the primary key (SQL Server error 2627), its transaction rolls
-back, and the worker treats it as already processed. The integration tests force exactly that race.
+back, and the worker treats it as already processed. An integration test runs two copies against real SQL Server,
+checks from the log that the loser really reached the primary key rather than the early check, and checks that the
+loser's timestamp was rolled back.
 
 **Retries and poison messages.** `OrderPlacedConsumerDefinition` retries in memory after 1, 5 and 15 seconds, which
 covers transient faults like a deadlock or a timeout. After the last retry MassTransit moves the message to the
@@ -107,11 +112,22 @@ reads whole. Orders need transactions and relational integrity: lines belong to 
 fulfilment updates status. The catalogue list loads documents by id prefix instead of querying an index, so it is never
 stale right after the seed runs.
 
-**Money is `decimal`, stored as `decimal(10,2)`.** 3 x 12.99 is exactly 38.97, and the integration tests check the
-value round-trips through SQL Server unchanged.
+**Money is `decimal`, stored as `decimal(10,2)`.** 3 x 12.99 is exactly 38.97 in `decimal` (a unit test checks it),
+and an integration test checks that an order total of 33.97 round-trips through SQL Server unchanged.
+
+**Concurrent cart changes.** Cart lines carry a SQL Server `rowversion`. Adding to the cart re-reads and retries when
+another request changed the same cart in between, so two quick clicks never lose an addition (an integration test
+fires five adds at once and expects a quantity of 5). Checkout deletes the cart lines with their rowversion in the
+`WHERE` clause, so if the cart changed after checkout read it, nothing is written and the API answers 409 asking the
+shopper to review the cart.
 
 ## Limitations
 
+- **Publishing before the worker's queue exists.** RabbitMQ drops a published message that no queue is bound to
+  yet. On a brand-new broker the `order-placed` queue appears only when the worker first starts, so an order placed
+  before that would stay `Placed`. Compose starts the worker before the API, and CI waits until the queue has a
+  consumer before running the browser tests. Declaring the queue and binding up front (for example from a RabbitMQ
+  definitions file) would close the gap.
 - **Dual write.** Checkout commits to SQL Server and then publishes to RabbitMQ. If the broker is unreachable between
   the two, the order is saved as `Placed` but never published, and the API returns an error. The standard fix is a
   transactional outbox (MassTransit has one for EF Core), which is the next step.

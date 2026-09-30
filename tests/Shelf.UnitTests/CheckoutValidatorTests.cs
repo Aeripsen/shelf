@@ -73,6 +73,17 @@ public class CheckoutValidatorTests
     }
 
     [Test]
+    public void Email_at_the_column_limit_is_accepted_and_one_longer_is_rejected()
+    {
+        var atLimit = new string('a', CheckoutValidator.MaxEmailLength - "@example.com".Length) + "@example.com";
+        var tooLong = "a" + atLimit;
+
+        Assert.That(atLimit, Has.Length.EqualTo(320));
+        Assert.That(CheckoutValidator.Validate(atLimit, new[] { Item("emma", 1) }, Books), Is.Empty);
+        Assert.That(CheckoutValidator.Validate(tooLong, new[] { Item("emma", 1) }, Books), Is.EqualTo(new[] { CheckoutValidator.InvalidEmail }));
+    }
+
+    [Test]
     public void All_problems_are_reported_together()
     {
         var errors = CheckoutValidator.Validate("bad", new[] { Item("emma", 0), Item("ulysses", 1) }, Books);

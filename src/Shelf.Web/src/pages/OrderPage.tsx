@@ -18,9 +18,17 @@ export function OrderPage() {
         const latest = await api.order(id)
         if (stopped) return
         setOrder(latest)
+        setError(null)
         if (latest.status !== 'Fulfilled') timer = window.setTimeout(poll, 1000)
       } catch (e) {
-        if (!stopped) setError(e instanceof ApiError && e.status === 404 ? 'Order not found.' : 'Could not load the order.')
+        if (stopped) return
+        if (e instanceof ApiError && e.status === 404) {
+          setError('Order not found.')
+          return
+        }
+        // A network blip or a 5xx: keep showing the last known order and try again shortly.
+        setError('Could not refresh the order, retrying...')
+        timer = window.setTimeout(poll, 2000)
       }
     }
 
@@ -31,8 +39,7 @@ export function OrderPage() {
     }
   }, [id])
 
-  if (error) return <p className="error">{error}</p>
-  if (!order) return <p className="muted">Loading your order...</p>
+  if (!order) return error ? <p className="error">{error}</p> : <p className="muted">Loading your order...</p>
 
   return (
     <section>
@@ -46,6 +53,7 @@ export function OrderPage() {
           {order.status}
         </strong>
       </p>
+      {error && <p className="error">{error}</p>}
       {order.status === 'Placed' && (
         <p className="muted">Your purchase is complete. Fulfilment is running in the background.</p>
       )}

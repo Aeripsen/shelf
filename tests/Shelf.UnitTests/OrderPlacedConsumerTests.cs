@@ -79,6 +79,30 @@ public class OrderPlacedConsumerTests
     }
 
     [Test]
+    public async Task Configured_policy_waits_1_then_5_seconds_between_attempts()
+    {
+        // Two failures, so success needs the first two intervals of the real policy: 1 s, then 5 s.
+        // A policy with shorter or fewer intervals finishes too early or never succeeds.
+        var fake = new FlakyFulfilment(failuresBeforeSuccess: 2);
+        await using var provider = BuildProvider(fake);
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await harness.Bus.Publish(new OrderPlaced(Guid.NewGuid(), 11.50m, DateTime.UtcNow));
+        var finished = await Task.WhenAny(fake.Succeeded.Task, Task.Delay(TimeSpan.FromSeconds(20)));
+        clock.Stop();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finished, Is.SameAs(fake.Succeeded.Task), "the second retry never succeeded");
+            Assert.That(fake.Calls, Is.EqualTo(3));
+            Assert.That(clock.Elapsed, Is.GreaterThanOrEqualTo(TimeSpan.FromSeconds(5.5)), "1 s + 5 s of retry delay expected");
+            Assert.That(clock.Elapsed, Is.LessThan(TimeSpan.FromSeconds(15)), "success should not wait for the 15 s interval");
+        });
+    }
+
+    [Test]
     public void Retry_policy_is_1_5_and_15_seconds()
     {
         Assert.That(OrderPlacedConsumerDefinition.RetryIntervals,

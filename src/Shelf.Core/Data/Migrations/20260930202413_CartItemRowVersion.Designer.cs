@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Shelf.Core.Data;
 
@@ -11,9 +12,11 @@ using Shelf.Core.Data;
 namespace Shelf.Core.Data.Migrations
 {
     [DbContext(typeof(ShelfDbContext))]
-    partial class ShelfDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260930202413_CartItemRowVersion")]
+    partial class CartItemRowVersion
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

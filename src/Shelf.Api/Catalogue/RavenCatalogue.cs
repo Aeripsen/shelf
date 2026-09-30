@@ -6,16 +6,23 @@ namespace Shelf.Api.Catalogue;
 public class RavenCatalogue(IDocumentStore store) : ICatalogue
 {
     public const string IdPrefix = "books/";
+    private const int PageSize = 256;
 
     public async Task<IReadOnlyList<Book>> GetAllAsync(CancellationToken ct = default)
     {
-        using var session = store.OpenAsyncSession();
-
         // Loading by id prefix reads the documents directly instead of querying an index, so the list is never
-        // stale, even right after the seed runs.
-        var docs = await session.Advanced.LoadStartingWithAsync<BookDocument>(IdPrefix, pageSize: 1024, token: ct);
+        // stale, even right after the seed runs. Read page by page until a short page says there is no more.
+        var books = new List<Book>();
+        for (var start = 0; ; start += PageSize)
+        {
+            using var session = store.OpenAsyncSession();
+            var page = (await session.Advanced.LoadStartingWithAsync<BookDocument>(IdPrefix, start: start, pageSize: PageSize, token: ct)).ToList();
+            books.AddRange(page.Select(ToBook));
+            if (page.Count < PageSize)
+                break;
+        }
 
-        return docs.Select(ToBook).OrderBy(b => b.Title, StringComparer.OrdinalIgnoreCase).ToList();
+        return books.OrderBy(b => b.Title, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     public async Task<Book?> GetAsync(string slug, CancellationToken ct = default)

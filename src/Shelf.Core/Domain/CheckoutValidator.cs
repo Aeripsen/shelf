@@ -8,6 +8,9 @@ public static class CheckoutValidator
     public const int MinQuantity = 1;
     public const int MaxQuantity = 10;
 
+    /// <summary>Longest address the Orders.Email column holds. The DbContext uses the same constant.</summary>
+    public const int MaxEmailLength = 320;
+
     public const string EmptyCart = "The cart is empty.";
     public const string InvalidEmail = "A valid email address is required.";
 
@@ -47,7 +50,8 @@ public static class CheckoutValidator
             return false;
         var trimmed = email.Trim();
         var at = trimmed.IndexOf('@');
-        return at > 0
+        return trimmed.Length <= MaxEmailLength
+            && at > 0
             && at < trimmed.Length - 1
             && trimmed.IndexOf('@', at + 1) < 0
             && !trimmed.Any(char.IsWhiteSpace);

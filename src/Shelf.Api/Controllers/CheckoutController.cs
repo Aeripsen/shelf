@@ -51,7 +51,20 @@ public class CheckoutController(
         db.CartItems.RemoveRange(items);
 
         // One SaveChanges is one transaction: the new order and the emptied cart commit together or not at all.
-        await db.SaveChangesAsync(ct);
+        // Each cart item is deleted with its rowversion in the WHERE clause, so if the cart changed after we read it
+        // (a quantity bumped in another tab, or a second checkout of the same cart) nothing is written and the
+        // shopper is asked to review the cart, instead of an order that no longer matches it.
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Cart changed",
+                detail: "Your cart changed while you were checking out. Review it and place the order again.");
+        }
 
         // Published after the commit, so the worker never sees an order that is not in the database yet.
         // Known gap: if the broker is unreachable right here, the order is saved but never published (a dual write).

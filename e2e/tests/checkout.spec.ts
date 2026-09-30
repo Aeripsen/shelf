@@ -48,7 +48,7 @@ test('adding a book twice doubles the line and the total uses the catalogue pric
   await expect(page.getByTestId('cart-total')).toHaveText(`$${(price * 2).toFixed(2)}`)
 })
 
-test('checking out an empty cart shows the error from the API and places no order', async ({ page }) => {
+test('checking out an empty cart shows the error from the API and stays on the cart', async ({ page }) => {
   await page.goto('/cart')
   await expect(page.getByTestId('cart-empty')).toBeVisible()
 

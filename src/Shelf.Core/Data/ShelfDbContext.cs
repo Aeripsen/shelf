@@ -23,13 +23,14 @@ public class ShelfDbContext(DbContextOptions<ShelfDbContext> options) : DbContex
         {
             e.Property(i => i.BookId).HasMaxLength(200).IsRequired();
             e.HasIndex(i => new { i.CartId, i.BookId }).IsUnique();
+            e.Property(i => i.RowVersion).IsRowVersion();
         });
 
         b.Entity<Order>(e =>
         {
             e.HasKey(o => o.Id);
             e.Property(o => o.Id).ValueGeneratedNever();
-            e.Property(o => o.Email).HasMaxLength(320).IsRequired();
+            e.Property(o => o.Email).HasMaxLength(Domain.CheckoutValidator.MaxEmailLength).IsRequired();
             e.Property(o => o.Status).HasConversion<string>().HasMaxLength(20);
             e.Property(o => o.Total).HasPrecision(10, 2);
             e.HasMany(o => o.Lines).WithOne().HasForeignKey(l => l.OrderId).OnDelete(DeleteBehavior.Cascade);

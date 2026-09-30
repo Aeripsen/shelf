@@ -13,6 +13,12 @@ public class CartItem
     public Guid CartId { get; set; }
     public string BookId { get; set; } = "";
     public int Quantity { get; set; }
+
+    /// <summary>
+    /// SQL Server rowversion, used as an optimistic concurrency token. An update or delete made from a stale read
+    /// fails with DbUpdateConcurrencyException instead of silently overwriting a newer change.
+    /// </summary>
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 }
 
 public enum OrderStatus
