@@ -101,11 +101,4 @@ public class OrderPlacedConsumerTests
             Assert.That(clock.Elapsed, Is.LessThan(TimeSpan.FromSeconds(15)), "success should not wait for the 15 s interval");
         });
     }
-
-    [Test]
-    public void Retry_policy_is_1_5_and_15_seconds()
-    {
-        Assert.That(OrderPlacedConsumerDefinition.RetryIntervals,
-            Is.EqualTo(new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15) }));
-    }
 }

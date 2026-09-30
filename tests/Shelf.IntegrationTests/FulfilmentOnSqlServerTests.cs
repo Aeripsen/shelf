@@ -9,7 +9,7 @@ namespace Shelf.IntegrationTests;
 
 /// <summary>
 /// The worker's idempotency on real SQL Server, where the ProcessedMessages primary key is enforced.
-/// The schema comes from the same committed migrations the API applies.
+/// The schema comes from the same committed migrations the API applies, in this fixture's own database.
 /// </summary>
 public class FulfilmentOnSqlServerTests
 {
@@ -54,7 +54,7 @@ public class FulfilmentOnSqlServerTests
     public async Task Migrate()
     {
         _options = new DbContextOptionsBuilder<ShelfDbContext>()
-            .UseSqlServer(SqlServerFixture.ConnectionString)
+            .UseSqlServer(SqlServerFixture.ConnectionStringFor("ShelfFulfilmentTests"))
             .Options;
         await using var db = new ShelfDbContext(_options);
         await db.Database.MigrateAsync();

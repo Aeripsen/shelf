@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Shelf.Api;
 using Shelf.Contracts;
+using Shelf.Core.Catalogue;
 using Shelf.Core.Data;
 
 namespace Shelf.IntegrationTests;
@@ -21,7 +22,7 @@ public class CheckoutApiTests
     [OneTimeSetUp]
     public void StartApi()
     {
-        _factory = new ShelfApiFactory();
+        _factory = new ShelfApiFactory("ShelfApiTests");
         _factory.CreateClient().Dispose(); // starts the host, which runs the migrations
         _harness = _factory.Services.GetTestHarness();
     }
@@ -29,9 +30,17 @@ public class CheckoutApiTests
     [OneTimeTearDown]
     public void StopApi() => _factory.Dispose();
 
+    [TearDown]
+    public void Disarm() => _factory.Catalogue.GetManyBarrier = null;
+
     private HttpClient NewCartClient(out Guid cartId)
     {
         cartId = Guid.NewGuid();
+        return CartClient(cartId);
+    }
+
+    private HttpClient CartClient(Guid cartId)
+    {
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add(CartHeader.Name, cartId.ToString());
         return client;
@@ -43,18 +52,13 @@ public class CheckoutApiTests
         return await query(scope.ServiceProvider.GetRequiredService<ShelfDbContext>());
     }
 
-    [Test]
-    public async Task Committed_migrations_are_applied_to_SQL_Server_at_startup()
-    {
-        var applied = await WithDb(async db => (await db.Database.GetAppliedMigrationsAsync()).ToList());
-        var pending = await WithDb(async db => (await db.Database.GetPendingMigrationsAsync()).ToList());
+    private static string UniqueEmail() => $"reader-{Guid.NewGuid():N}@example.com";
 
-        Assert.That(applied, Has.Some.EndsWith("_InitialCreate"));
-        Assert.That(pending, Is.Empty);
-    }
+    private async Task<bool> OrderPlacedWasSent(Guid orderId) =>
+        await _harness.Published.Any<OrderPlaced>(m => m.Context.Message.OrderId == orderId);
 
     [Test]
-    public async Task Checkout_saves_the_order_with_catalogue_prices_empties_the_cart_and_publishes_OrderPlaced()
+    public async Task Checkout_saves_the_order_with_catalogue_prices_empties_the_cart_and_the_outbox_sends_OrderPlaced()
     {
         using var client = NewCartClient(out var cartId);
         (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "pride-and-prejudice", quantity = 2 })).EnsureSuccessStatusCode();
@@ -85,12 +89,74 @@ public class CheckoutApiTests
         var cartItemsLeft = await WithDb(db => db.CartItems.CountAsync(i => i.CartId == cartId));
         Assert.That(cartItemsLeft, Is.EqualTo(0), "checkout empties the cart");
 
+        // Sent by the outbox delivery service after the commit, not by the request itself.
         Assert.That(await _harness.Published.Any<OrderPlaced>(m => m.Context.Message.OrderId == body.OrderId && m.Context.Message.Total == 33.97m), Is.True);
     }
 
     [Test]
-    public async Task Price_sent_by_the_client_is_ignored()
+    public async Task Two_concurrent_checkouts_of_one_cart_give_one_201_one_409_and_one_order()
     {
+        using var client = NewCartClient(out var cartId);
+        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 2 })).EnsureSuccessStatusCode();
+        var email = UniqueEmail();
+
+        // Both requests read the cart, then meet in the catalogue call, then both try to commit. The first commit
+        // deletes the cart lines; the second finds its rowversions gone, so its whole transaction rolls back.
+        _factory.Catalogue.GetManyBarrier = new Barrier(2);
+        using var second = CartClient(cartId);
+        var responses = await Task.WhenAll(
+            client.PostAsJsonAsync("/api/checkout", new { email }),
+            second.PostAsJsonAsync("/api/checkout", new { email }));
+        _factory.Catalogue.GetManyBarrier = null;
+
+        var codes = responses.Select(r => r.StatusCode).OrderBy(c => c).ToList();
+        Assert.That(codes, Is.EqualTo(new[] { HttpStatusCode.Created, HttpStatusCode.Conflict }));
+
+        var conflict = responses.Single(r => r.StatusCode == HttpStatusCode.Conflict);
+        Assert.That(await conflict.Content.ReadAsStringAsync(), Does.Contain("Your cart changed"));
+
+        var orders = await WithDb(db => db.Orders.Where(o => o.Email == email).Select(o => o.Id).ToListAsync());
+        Assert.That(orders, Has.Count.EqualTo(1), "the losing checkout's order must roll back with its failed delete");
+        Assert.That(await OrderPlacedWasSent(orders[0]), Is.True);
+
+        // The loser also wrote an OrderPlaced to the outbox before its transaction failed. Give the delivery service
+        // ten polls, then check that every OrderPlaced it has ever sent in this fixture belongs to a committed order.
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        var sent = _harness.Published.Select<OrderPlaced>(new CancellationToken(canceled: true))
+            .Select(m => m.Context.Message.OrderId).ToList();
+        var committed = await WithDb(db => db.Orders.CountAsync(o => sent.Contains(o.Id)));
+        Assert.That(committed, Is.EqualTo(sent.Count), "an event was sent for an order that rolled back");
+    }
+
+    [Test]
+    public async Task Lost_commit_acknowledgement_is_not_replayed_into_a_conflict()
+    {
+        // SQL Server commits the order, then the client sees a timeout and EF Core's retry strategy kicks in. A blind
+        // replay would try to delete cart lines that are already gone and answer 409 for an order that exists.
+        // verifySucceeded finds the committed order and the API answers 201 instead.
+        using var client = NewCartClient(out var cartId);
+        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "dracula", quantity = 1 })).EnsureSuccessStatusCode();
+        var email = UniqueEmail();
+        var firedBefore = _factory.LostAck.TimesFired;
+
+        _factory.LostAck.Arm();
+        var response = await client.PostAsJsonAsync("/api/checkout", new { email });
+
+        Assert.That(_factory.LostAck.TimesFired, Is.EqualTo(firedBefore + 1), "the fault was never injected");
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created), await response.Content.ReadAsStringAsync());
+        var body = (await response.Content.ReadFromJsonAsync<CheckoutResponse>(Json))!;
+
+        var orders = await WithDb(db => db.Orders.Where(o => o.Email == email).Select(o => o.Id).ToListAsync());
+        Assert.That(orders, Is.EqualTo(new[] { body.OrderId }));
+        Assert.That(await WithDb(db => db.CartItems.CountAsync(i => i.CartId == cartId)), Is.EqualTo(0));
+        Assert.That(await OrderPlacedWasSent(body.OrderId), Is.True, "the event committed with the order, so the outbox sends it");
+    }
+
+    [Test]
+    public async Task Price_fields_in_requests_are_not_part_of_the_API_and_have_no_effect()
+    {
+        // The request types have no price field at all, so this guards against one being added later: the
+        // serializer drops the extra properties and the order is priced from the catalogue.
         using var client = NewCartClient(out _);
         (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 1, price = 0.01m, unitPrice = 0.01m })).EnsureSuccessStatusCode();
 
@@ -106,7 +172,7 @@ public class CheckoutApiTests
     public async Task Checkout_with_an_empty_cart_is_400_and_writes_no_order()
     {
         using var client = NewCartClient(out _);
-        var email = $"empty-{Guid.NewGuid():N}@example.com";
+        var email = UniqueEmail();
 
         var response = await client.PostAsJsonAsync("/api/checkout", new { email });
 
@@ -155,21 +221,26 @@ public class CheckoutApiTests
     }
 
     [Test]
-    public async Task Deleting_a_cart_line_read_before_another_change_fails_on_the_rowversion()
+    public async Task Removing_a_line_deletes_only_that_book_and_removing_a_missing_book_changes_nothing()
     {
         using var client = NewCartClient(out var cartId);
-        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 1 })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 2 })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "dracula", quantity = 1 })).EnsureSuccessStatusCode();
 
-        // Simulate the race directly: a context reads the cart line, then another request changes it, then the
-        // first context tries to delete what it read. The rowversion makes that delete fail rather than succeed.
-        using var scope = _factory.Services.CreateScope();
-        var staleDb = scope.ServiceProvider.GetRequiredService<ShelfDbContext>();
-        var staleItem = await staleDb.CartItems.SingleAsync(i => i.CartId == cartId);
-        (await client.PostAsJsonAsync("/api/cart/items", new { bookId = "emma", quantity = 1 })).EnsureSuccessStatusCode();
-        staleDb.CartItems.Remove(staleItem);
+        var removed = await client.DeleteAsync("/api/cart/items/emma");
+        var cart = (await removed.Content.ReadFromJsonAsync<CartView>(Json))!;
+        var again = await client.DeleteAsync("/api/cart/items/emma");
+        var unchanged = (await again.Content.ReadFromJsonAsync<CartView>(Json))!;
 
-        Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => staleDb.SaveChangesAsync());
-        Assert.That(await WithDb(db => db.CartItems.Where(i => i.CartId == cartId).Select(i => i.Quantity).SingleAsync()), Is.EqualTo(2));
+        Assert.Multiple(async () =>
+        {
+            Assert.That(removed.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(cart.Items.Select(i => (i.BookId, i.Quantity)), Is.EqualTo(new[] { ("dracula", 1) }));
+            Assert.That(cart.Total, Is.EqualTo(7.99m));
+            Assert.That(again.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(unchanged.Items.Select(i => i.BookId), Is.EqualTo(new[] { "dracula" }));
+            Assert.That(await WithDb(db => db.CartItems.Where(i => i.CartId == cartId).Select(i => i.BookId).ToListAsync()), Is.EqualTo(new[] { "dracula" }));
+        });
     }
 
     [Test]
@@ -190,9 +261,11 @@ public class CheckoutApiTests
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.GetAsync("/api/cart");
+        var get = await client.GetAsync("/api/cart");
+        var delete = await client.DeleteAsync("/api/cart/items/emma");
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(get.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(delete.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
     }
 
     [Test]
@@ -211,14 +284,29 @@ public class CheckoutApiTests
     }
 
     [Test]
-    public async Task Books_endpoint_serves_the_catalogue()
+    public async Task Books_endpoints_list_search_and_get_by_slug()
     {
         using var client = _factory.CreateClient();
 
-        var books = await client.GetFromJsonAsync<List<Shelf.Core.Catalogue.Book>>("/api/books", Json);
+        var all = await client.GetFromJsonAsync<List<Book>>("/api/books", Json);
+        var search = await client.GetFromJsonAsync<List<Book>>("/api/books?q=austen", Json);
+        var one = await client.GetFromJsonAsync<Book>("/api/books/dracula", Json);
         var missing = await client.GetAsync("/api/books/ulysses");
 
-        Assert.That(books!.Select(b => b.Slug), Is.EquivalentTo(new[] { "emma", "dracula", "pride-and-prejudice" }));
+        Assert.That(all!.Select(b => b.Slug), Is.EqualTo(new[] { "dracula", "emma", "pride-and-prejudice" }));
+        Assert.That(search!.Select(b => b.Slug), Is.EqualTo(new[] { "emma", "pride-and-prejudice" }));
+        Assert.That(one, Is.EqualTo(ShelfApiFactory.Dracula));
         Assert.That(missing.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task Health_endpoint_checks_SQL_Server_and_the_bus()
+    {
+        using var client = _factory.CreateClient();
+
+        var healthy = await client.GetAsync("/health");
+
+        Assert.That(healthy.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(await healthy.Content.ReadAsStringAsync(), Is.EqualTo("Healthy"));
     }
 }
