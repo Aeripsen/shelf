@@ -11,19 +11,26 @@ export function BookList({ onCartChanged }: Props) {
   const [added, setAdded] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [searched, setSearched] = useState('')
+  // Each submission gets a new object, so searching the same text again (after a failure) fetches again.
+  const [submitted, setSubmitted] = useState({ text: '' })
+  const searched = submitted.text
 
   useEffect(() => {
+    // Only the latest search may update the page: a slower, older response is ignored when it arrives.
+    let stale = false
     api
-      .books(searched)
-      .then(setBooks)
-      .catch((e: unknown) => setError(e instanceof ApiError ? e.message : 'Could not load the catalogue.'))
-  }, [searched])
+      .books(submitted.text)
+      .then((found) => !stale && setBooks(found))
+      .catch((e: unknown) => !stale && setError(e instanceof ApiError ? e.message : 'Could not load the catalogue.'))
+    return () => {
+      stale = true
+    }
+  }, [submitted])
 
   function search(event: FormEvent) {
     event.preventDefault()
     setError(null)
-    setSearched(query.trim())
+    setSubmitted({ text: query.trim() })
   }
 
   async function add(book: Book) {

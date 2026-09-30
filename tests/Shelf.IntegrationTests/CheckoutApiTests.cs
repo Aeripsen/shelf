@@ -132,11 +132,15 @@ public class CheckoutApiTests
         Assert.That(await OrderPlacedWasDelivered(orders[0]), Is.True);
 
         // The loser also wrote an OrderPlaced to the outbox before its transaction failed. Give the delivery service
-        // ten polls, then check that every OrderPlaced it has delivered in this fixture belongs to a committed order.
+        // ten polls, then check that every order it has delivered an event for in this fixture is committed.
+        // Delivery is at least once, so the same order may appear twice; that is allowed, a missing order is not.
         await Task.Delay(TimeSpan.FromSeconds(1));
-        var sent = DeliveredSoFar();
-        var committed = await WithDb(db => db.Orders.CountAsync(o => sent.Contains(o.Id)));
-        Assert.That(committed, Is.EqualTo(sent.Count), "an event was sent for an order that rolled back");
+        var delivered = DeliveredSoFar();
+        var distinct = delivered.Distinct().ToList();
+        var committed = await WithDb(db => db.Orders.Where(o => distinct.Contains(o.Id)).Select(o => o.Id).ToListAsync());
+        TestContext.Progress.WriteLine($"OrderPlaced deliveries so far: {delivered.Count}, distinct orders: {distinct.Count}, " +
+            $"repeated: {string.Join(", ", delivered.GroupBy(id => id).Where(g => g.Count() > 1).Select(g => $"{g.Key} x{g.Count()}"))}");
+        Assert.That(distinct.Except(committed), Is.Empty, "an event was delivered for an order that rolled back");
     }
 
     [Test]
