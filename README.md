@@ -89,6 +89,10 @@ docker compose up --build
 | RabbitMQ management | http://localhost:15672 (guest / guest) |
 | RavenDB Studio | http://localhost:8081 |
 
+Every port is published on `127.0.0.1` only, so the stack is reachable from the machine running Docker and from no
+other. That matters because RavenDB runs without a login and RabbitMQ keeps its default `guest` / `guest` user. If you
+change the `127.0.0.1:` prefixes in `docker-compose.yml` on purpose, secure both first.
+
 The SQL Server password comes from `MSSQL_SA_PASSWORD` (copy `.env.example` to `.env`). Without it, compose uses a
 local development default, `Shelf_LocalDev_Only1`, which is only for your own machine.
 

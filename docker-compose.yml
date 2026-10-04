@@ -4,6 +4,10 @@
 #   RabbitMQ UI     http://localhost:15672  (guest / guest)
 #   RavenDB Studio  http://localhost:8081
 #
+# Every published port is bound to 127.0.0.1, so the stack is not reachable from other machines. RavenDB has no
+# login and RabbitMQ keeps its default guest / guest user, which is only acceptable because of that. Do not remove
+# the 127.0.0.1 prefixes without securing both first.
+#
 # The SQL Server password comes from MSSQL_SA_PASSWORD (put it in a .env file, see .env.example).
 # Shelf_LocalDev_Only1 is a local development default only. CI generates a fresh password on every run.
 
@@ -15,7 +19,7 @@ services:
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Shelf_LocalDev_Only1}
-    ports: ["1433:1433"]
+    ports: ["127.0.0.1:1433:1433"]
     healthcheck:
       test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' || exit 1"]
       interval: 10s
@@ -28,13 +32,15 @@ services:
     environment:
       RAVEN_Setup_Mode: "None"
       RAVEN_License_Eula_Accepted: "true"
+      # RavenDB runs unsecured here (no certificate, no login). That is acceptable only because the compose network
+      # is private and its one published port is bound to 127.0.0.1. Do not publish it on another interface.
       RAVEN_Security_UnsecuredAccessAllowed: "PublicNetwork"
       RAVEN_ServerUrl: "http://0.0.0.0:8080"
-    ports: ["8081:8080"]
+    ports: ["127.0.0.1:8081:8080"]
 
   rabbitmq:
     image: rabbitmq:3-management
-    ports: ["5672:5672", "15672:15672"]
+    ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -50,7 +56,7 @@ services:
       ConnectionStrings__Orders: *sql-connection
       RavenDb__Url: http://ravendb:8080
       RabbitMq__Host: rabbitmq
-    ports: ["5080:8080"]
+    ports: ["127.0.0.1:5080:8080"]
     depends_on:
       sqlserver: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
@@ -76,5 +82,5 @@ services:
       context: .
       dockerfile: src/Shelf.Web/Dockerfile
     image: shelf-web
-    ports: ["3000:80"]
+    ports: ["127.0.0.1:3000:80"]
     depends_on: [api]
