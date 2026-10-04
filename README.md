@@ -75,9 +75,10 @@ Every new CI run produces the same files again from the committed tests.
 ## Run it
 
 Needs Docker. On a machine without Docker, open the repo in GitHub Codespaces (Code, then Codespaces): the
-`.devcontainer` has Docker, the .NET 8 SDK and Node 22.
+`.devcontainer` has Docker, the .NET 8 SDK and Node 22, and creates `.env` for you.
 
 ```sh
+cp .env.example .env
 docker compose up --build
 ```
 
@@ -93,14 +94,15 @@ Every port is published on `127.0.0.1` only, so the stack is reachable from the 
 other. That matters because RavenDB runs without a login and RabbitMQ keeps its default `guest` / `guest` user. If you
 change the `127.0.0.1:` prefixes in `docker-compose.yml` on purpose, secure both first.
 
-The SQL Server password comes from `MSSQL_SA_PASSWORD` (copy `.env.example` to `.env`). Without it, compose uses a
-local development default, `Shelf_LocalDev_Only1`, which is only for your own machine.
+The SQL Server password comes from `MSSQL_SA_PASSWORD` in `.env`. `docker-compose.yml` has no default for it, so
+compose stops with an error until `.env` exists. `.env.example` holds a local development value, `Shelf_LocalDev_Only1`,
+for your own machine only; CI generates a fresh password on every run.
 
 To run the API or the worker from source instead, start the infrastructure with
 `docker compose up -d sqlserver ravendb rabbitmq`, then `dotnet run --project src/Shelf.Fulfilment`,
 `dotnet run --project src/Shelf.Api` (port 5080), and `npm run dev` in `src/Shelf.Web` (port 5173, proxies `/api`).
-From source both services use the development connection string with the default password. If you set your own
-`MSSQL_SA_PASSWORD`, also set `ConnectionStrings__Orders` for both processes to match.
+From source both services use the development connection string, which has the `.env.example` password. If you put
+your own `MSSQL_SA_PASSWORD` in `.env`, also set `ConnectionStrings__Orders` for both processes to match.
 
 ## Tests
 

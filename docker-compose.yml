@@ -1,3 +1,4 @@
+# cp .env.example .env        (once; compose will not start without it)
 # docker compose up --build
 #   storefront      http://localhost:3000
 #   API + Swagger   http://localhost:5080/swagger
@@ -8,17 +9,17 @@
 # login and RabbitMQ keeps its default guest / guest user, which is only acceptable because of that. Do not remove
 # the 127.0.0.1 prefixes without securing both first.
 #
-# The SQL Server password comes from MSSQL_SA_PASSWORD (put it in a .env file, see .env.example).
-# Shelf_LocalDev_Only1 is a local development default only. CI generates a fresh password on every run.
+# The SQL Server password comes from MSSQL_SA_PASSWORD. There is no default in this file: copy .env.example to .env
+# first, or compose stops with an error. CI generates a fresh password on every run.
 
-x-sql-connection: &sql-connection "Server=sqlserver,1433;Database=Shelf;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Shelf_LocalDev_Only1};TrustServerCertificate=True"
+x-sql-connection: &sql-connection "Server=sqlserver,1433;Database=Shelf;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env, copy .env.example to .env};TrustServerCertificate=True"
 
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Shelf_LocalDev_Only1}
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env, copy .env.example to .env}
     ports: ["127.0.0.1:1433:1433"]
     healthcheck:
       test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' || exit 1"]
