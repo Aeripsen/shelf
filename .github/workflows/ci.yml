@@ -7,10 +7,13 @@ on:
 permissions:
   contents: read
 
+# Every job is pinned to ubuntu-24.04, the image `ubuntu-latest` means today. GitHub starts moving that label to
+# Ubuntu 26.04 on 2026-10-19 (actions/runner-images#14748), and for a few weeks a run could land on either image.
+# Move to 26.04 on purpose, after one green run on it.
 jobs:
   unit:
     name: NUnit unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -26,7 +29,7 @@ jobs:
 
   integration:
     name: NUnit integration tests (SQL Server and RavenDB in containers)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -44,7 +47,7 @@ jobs:
 
   mutation:
     name: Stryker.NET mutation testing of the fulfilment worker
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -67,7 +70,7 @@ jobs:
 
   web:
     name: Storefront lint and strict TypeScript build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: src/Shelf.Web
@@ -84,7 +87,7 @@ jobs:
 
   e2e:
     name: Docker images, cold-start check and Playwright end-to-end tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 

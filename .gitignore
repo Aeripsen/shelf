@@ -485,5 +485,13 @@ $RECYCLE.BIN/
 
 # Shelf
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+appsettings.Production.json
+/playwright-report/
+.claude/settings.local.json
+.claude/worktrees/
 node_modules/
 StrykerOutput/

@@ -16,5 +16,6 @@
     "15672": { "label": "RabbitMQ management" },
     "8081": { "label": "RavenDB Studio" }
   },
-  "postCreateCommand": "dotnet restore Shelf.sln && (cd e2e && npm ci)"
+  // Creates .env from .env.example if it is missing (docker compose needs MSSQL_SA_PASSWORD), then restores packages.
+  "postCreateCommand": "[ -f .env ] || cp .env.example .env; dotnet restore Shelf.sln && (cd e2e && npm ci)"
 }
